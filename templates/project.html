@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+  <div>
+    <h1 class="mb-1">{{ project.name }}</h1>
+    <p class="text-muted mb-0">{{ project_images|length }} image(s) in this project</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    <a href="/export" class="btn btn-warning">Export All Annotations (ZIP)</a>
+    <form method="POST" action="/project/{{ project.id }}/delete" onsubmit="return confirm('Delete this project and all its images, labels, annotations, and model files?');">
+      <button type="submit" class="btn btn-outline-danger">Delete Project</button>
+    </form>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h3 class="h5">Upload Images</h3>
+        <form method="POST" action="/project/{{ project.id }}/upload" enctype="multipart/form-data">
+          <input type="file" name="files" accept="image/*" class="form-control mb-3" multiple required>
+          <div class="d-flex flex-wrap gap-2">
+            <button type="submit" class="btn btn-primary">Upload Selected Images</button>
+            {% if project_images %}
+              <a href="/annotate/{{ project_images[0].id }}" class="btn btn-outline-secondary">Open Annotator</a>
+            {% endif %}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h3 class="h5">YOLO Model</h3>
+        <form method="POST" action="/project/{{ project.id }}/upload_model" enctype="multipart/form-data" class="mb-3">
+          <input type="file" name="model" accept=".pt" class="form-control mb-2" required>
+          <button type="submit" class="btn btn-success">Upload Model</button>
+        </form>
+
+        {% if project.model_path %}
+          <p class="text-success mb-3">Custom model loaded: <strong>{{ model_filename }}</strong></p>
+        {% else %}
+          <p class="text-muted mb-3">No custom model uploaded yet</p>
+        {% endif %}
+
+        <form method="POST" action="/project/{{ project.id }}/auto_annotate">
+          <button type="submit" class="btn btn-dark" {% if not project_images %}disabled{% endif %}>
+            Auto Annotate All Images
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 mt-1">
+  <div class="col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h3 class="h5">Label Classes</h3>
+        <p class="text-muted">Add as many classes as you need. These class IDs are used by the annotator and in YOLO export.</p>
+
+        <form method="POST" action="/project/{{ project.id }}/labels" class="mb-3">
+          <div class="input-group">
+            <input type="text" name="label_name" class="form-control" placeholder="Example: Person, Helmet, Vehicle" required>
+            <button type="submit" class="btn btn-primary">Add Label</button>
+          </div>
+        </form>
+
+        <div class="list-group">
+          {% for label in labels %}
+            <div class="list-group-item d-flex justify-content-between align-items-center gap-3">
+              <div>
+                <strong>Class {{ label.label_index }}</strong>
+                <div class="text-muted small">{{ label.name }}</div>
+              </div>
+              <form method="POST" action="/project/{{ project.id }}/labels/{{ label.id }}/delete" onsubmit="return confirm('Delete this label? This only works when no annotations use it.');">
+                <button type="submit" class="btn btn-sm btn-outline-danger" {% if label.label_index == 0 and labels|length == 1 %}disabled{% endif %}>Delete</button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mt-5">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Uploaded Images</h3>
+    {% if project_images %}
+      <span class="text-muted small">Click any image to open it in the annotation workspace</span>
+    {% endif %}
+  </div>
+
+  {% if project_images %}
+    <div class="row">
+      {% for img in project_images %}
+        <div class="col-sm-6 col-md-4 col-xl-3 mb-4">
+          <div class="card h-100 shadow-sm">
+            <img src="{{ image_urls[img.id] }}"
+                 onerror="if (!this.dataset.fallbackApplied) { this.dataset.fallbackApplied = '1'; this.src = '{{ upload_urls[img.id] }}'; }"
+                 class="card-img-top"
+                 style="height:180px; object-fit:cover;"
+                 alt="{{ img.filename }}">
+            <div class="card-body d-flex flex-column">
+              <p class="card-text text-truncate mb-3">{{ img.filename }}</p>
+              <div class="d-flex gap-2 mt-auto">
+                <a href="/annotate/{{ img.id }}" class="btn btn-sm btn-primary flex-grow-1">Annotate</a>
+                <form method="POST" action="/project/{{ project.id }}/images/{{ img.id }}/delete" onsubmit="return confirm('Delete this image and its annotations?');">
+                  <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="text-muted">No images uploaded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

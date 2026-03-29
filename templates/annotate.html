@@ -1,0 +1,790 @@
+{% extends "base.html" %}
+
+{% block title %}Annotate - {{ image.filename }}{% endblock %}
+
+{% block head %}
+  <style>
+    .annotate-shell {
+      display: grid;
+      gap: 1.5rem;
+    }
+    .canvas-card {
+      background: #fff;
+      border-radius: 1rem;
+      padding: 1rem;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+    .canvas-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+    .canvas-stage {
+      display: grid;
+      gap: 1rem;
+      justify-items: center;
+    }
+    .canvas-container {
+      position: relative;
+      display: inline-block;
+      background:
+        linear-gradient(45deg, #111827 25%, #1f2937 25%, #1f2937 50%, #111827 50%, #111827 75%, #1f2937 75%, #1f2937 100%);
+      background-size: 18px 18px;
+      border-radius: 0.85rem;
+      overflow: hidden;
+      margin: 0 auto;
+      max-width: 100%;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+    .canvas-nav {
+      width: min(100%, 960px);
+    }
+    .carousel-bar {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 1rem;
+      align-items: center;
+      background: #fff;
+      border-radius: 1rem;
+      padding: 1rem;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+    .carousel-arrow {
+      min-width: 54px;
+      min-height: 54px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      text-decoration: none;
+    }
+    .carousel-arrow.disabled {
+      pointer-events: none;
+      opacity: 0.45;
+    }
+    .carousel-meta {
+      min-width: 0;
+      text-align: center;
+    }
+    .carousel-meta p {
+      margin-bottom: 0;
+    }
+    #annotation-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      cursor: crosshair;
+    }
+    .is-hovering-box {
+      cursor: move !important;
+    }
+    .is-hovering-handle {
+      cursor: nwse-resize !important;
+    }
+    .is-drawing {
+      cursor: crosshair !important;
+    }
+    .is-moving {
+      cursor: grabbing !important;
+    }
+    .is-resizing {
+      cursor: nwse-resize !important;
+    }
+    .hint-list {
+      margin: 0;
+      color: #6c757d;
+      font-size: 0.9rem;
+    }
+    .label-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .label-controls label {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #475569;
+      margin-bottom: 0;
+    }
+    .label-controls select {
+      min-width: 220px;
+    }
+    #status {
+      min-height: 1.5rem;
+      font-weight: 500;
+    }
+    @media (max-width: 767px) {
+      .carousel-bar {
+        grid-template-columns: auto 1fr auto;
+        gap: 0.5rem;
+        padding: 0.8rem;
+      }
+      .carousel-arrow {
+        min-width: 46px;
+        min-height: 46px;
+      }
+    }
+  </style>
+{% endblock %}
+
+{% block content %}
+<div class="annotate-shell">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+    <div>
+      <h1 class="mb-1">Annotating: {{ image.filename }}</h1>
+      <p class="text-muted mb-0">Use the left and right arrows to move through images like a carousel.</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <form method="POST"
+            action="/project/{{ image.project_id }}/images/{{ image.id }}/delete"
+            onsubmit="return confirm('Delete this image and its annotations?');">
+        <input type="hidden" name="next" value="annotate">
+        <button type="submit" class="btn btn-outline-danger">Delete Image</button>
+      </form>
+      <a href="/project/{{ image.project_id }}" class="btn btn-outline-secondary">Back to Project</a>
+    </div>
+  </div>
+
+  <div class="canvas-card">
+    <div class="canvas-toolbar">
+      <div class="d-flex flex-wrap gap-2">
+        <button id="auto-detect-btn" class="btn btn-primary">Auto-Detect (YOLO)</button>
+        <button id="delete-selected-btn" class="btn btn-outline-danger" disabled>Delete Selected Box</button>
+        <button id="clear-btn" class="btn btn-outline-danger">Clear All Boxes</button>
+        <button id="save-btn" class="btn btn-success">Save Annotations</button>
+      </div>
+      <div class="label-controls">
+        <label for="label-select">Active Class</label>
+        <select id="label-select" class="form-select form-select-sm">
+          {% for label in labels %}
+            <option value="{{ label.label_index }}">Class {{ label.label_index }} - {{ label.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div id="status" class="text-info">Ready...</div>
+    </div>
+
+    <div class="canvas-stage">
+      <div class="canvas-container">
+        <img id="main-image"
+             src="{{ image_url }}"
+             onerror="if (!this.dataset.fallbackApplied) { this.dataset.fallbackApplied = '1'; this.src = '{{ upload_fallback_url }}'; }"
+             alt="Image to annotate"
+             style="display:block; max-width:100%; height:auto;">
+        <canvas id="annotation-canvas"></canvas>
+      </div>
+
+      <div class="carousel-bar canvas-nav">
+        {% if prev_image %}
+          <a href="/annotate/{{ prev_image.id }}" class="carousel-arrow btn btn-outline-primary" aria-label="Previous image">&larr;</a>
+        {% else %}
+          <span class="carousel-arrow btn btn-outline-secondary disabled" aria-hidden="true">&larr;</span>
+        {% endif %}
+
+        <div class="carousel-meta">
+          <h2 class="h5 mb-1">{{ image.filename }}</h2>
+          <p class="text-muted">Image {{ current_index + 1 }} of {{ project_images|length }}</p>
+        </div>
+
+        {% if next_image %}
+          <a href="/annotate/{{ next_image.id }}" class="carousel-arrow btn btn-outline-primary" aria-label="Next image">&rarr;</a>
+        {% else %}
+          <span class="carousel-arrow btn btn-outline-secondary disabled" aria-hidden="true">&rarr;</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <p class="hint-list mt-3">
+      Click and drag on empty space to create a box. Click a box to select it. Drag the selected box to move it, drag its bottom-right handle to resize it, and use Delete/Backspace or the delete button to remove it.
+    </p>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("annotation-canvas");
+const ctx = canvas.getContext("2d");
+const imgElement = document.getElementById("main-image");
+const status = document.getElementById("status");
+const deleteSelectedBtn = document.getElementById("delete-selected-btn");
+const labelSelect = document.getElementById("label-select");
+const labelNameById = {
+  {% for label in labels %}
+    {{ label.label_index }}: {{ label.name | tojson }}{% if not loop.last %},{% endif %}
+  {% endfor %}
+};
+
+let boxes = [];
+let selectedIndex = -1;
+let interaction = null;
+let startPoint = null;
+let draftBox = null;
+let history = [];
+let historyIndex = -1;
+const MIN_BOX_SIZE = 10;
+const RESIZE_HANDLE_SIZE = 12;
+const labelPalette = ["#ff4d4f", "#52c41a", "#faad14", "#1677ff", "#eb2f96", "#13c2c2", "#722ed1", "#fa541c"];
+let activeLabel = Number(labelSelect.value || 0);
+function setStatus(message, isError = false) {
+  status.textContent = message;
+  status.classList.toggle("text-danger", isError);
+  status.classList.toggle("text-info", !isError);
+}
+
+
+function getLabelName(labelId) {
+  return labelNameById[labelId] || `Class ${labelId}`;
+}
+
+function getLabelColor(labelId) {
+  const paletteIndex = Math.abs(Number(labelId) || 0) % labelPalette.length;
+  return labelPalette[paletteIndex];
+}
+
+function cloneBoxes(sourceBoxes = boxes) {
+  return sourceBoxes.map(box => ({
+    x: Number(box.x),
+    y: Number(box.y),
+    w: Number(box.w),
+    h: Number(box.h),
+    label: Number(box.label ?? 0)
+  }));
+}
+
+function pushHistory(snapshot = boxes, nextSelectedIndex = selectedIndex) {
+  const cloned = cloneBoxes(snapshot);
+  const lastEntry = history[historyIndex];
+  const isDuplicate = lastEntry &&
+    lastEntry.selectedIndex === nextSelectedIndex &&
+    JSON.stringify(lastEntry.boxes) === JSON.stringify(cloned);
+
+  if (isDuplicate) {
+    return;
+  }
+
+  history = history.slice(0, historyIndex + 1);
+  history.push({
+    boxes: cloned,
+    selectedIndex: nextSelectedIndex
+  });
+  historyIndex = history.length - 1;
+}
+
+function applyHistory(entry) {
+  boxes = cloneBoxes(entry.boxes);
+  selectedIndex = entry.selectedIndex >= 0 && entry.selectedIndex < boxes.length ? entry.selectedIndex : -1;
+  if (selectedIndex >= 0 && boxes[selectedIndex]) {
+    activeLabel = Number(boxes[selectedIndex].label ?? activeLabel);
+  }
+  redraw();
+}
+
+function undo() {
+  if (historyIndex <= 0) {
+    setStatus("Nothing to undo", true);
+    return;
+  }
+
+  historyIndex -= 1;
+  applyHistory(history[historyIndex]);
+  setStatus("Undo applied");
+}
+
+function redo() {
+  if (historyIndex >= history.length - 1) {
+    setStatus("Nothing to redo", true);
+    return;
+  }
+
+  historyIndex += 1;
+  applyHistory(history[historyIndex]);
+  setStatus("Redo applied");
+}
+
+function setCanvasCursor(mode) {
+  canvas.classList.remove(
+    "is-hovering-box",
+    "is-hovering-handle",
+    "is-drawing",
+    "is-moving",
+    "is-resizing"
+  );
+
+  if (mode) {
+    canvas.classList.add(mode);
+  }
+}
+
+function getScale() {
+  return {
+    x: imgElement.clientWidth / imgElement.naturalWidth,
+    y: imgElement.clientHeight / imgElement.naturalHeight
+  };
+}
+
+function canvasToImageCoords(x, y) {
+  const scale = getScale();
+  return {
+    x: x / scale.x,
+    y: y / scale.y
+  };
+}
+
+function imageToCanvasBox(box) {
+  const scale = getScale();
+  return {
+    x: box.x * scale.x,
+    y: box.y * scale.y,
+    w: box.w * scale.x,
+    h: box.h * scale.y,
+    label: box.label
+  };
+}
+
+function getCanvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top
+  };
+}
+
+function clampBox(box) {
+  const maxWidth = imgElement.naturalWidth;
+  const maxHeight = imgElement.naturalHeight;
+
+  box.w = Math.max(MIN_BOX_SIZE, box.w);
+  box.h = Math.max(MIN_BOX_SIZE, box.h);
+  box.x = Math.max(0, Math.min(box.x, maxWidth - box.w));
+  box.y = Math.max(0, Math.min(box.y, maxHeight - box.h));
+  box.w = Math.min(box.w, maxWidth - box.x);
+  box.h = Math.min(box.h, maxHeight - box.y);
+}
+
+function updateDeleteButton() {
+  deleteSelectedBtn.disabled = selectedIndex < 0;
+  if (selectedIndex >= 0 && boxes[selectedIndex]) {
+    labelSelect.value = String(boxes[selectedIndex].label);
+  } else {
+    labelSelect.value = String(activeLabel);
+  }
+}
+
+function drawHandle(box) {
+  const handleX = box.x + box.w - RESIZE_HANDLE_SIZE;
+  const handleY = box.y + box.h - RESIZE_HANDLE_SIZE;
+  ctx.save();
+  ctx.fillStyle = "#0d6efd";
+  ctx.strokeStyle = "white";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.rect(handleX, handleY, RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawBox(box, options = {}) {
+  const { dashed = false, selected = false, faded = false, boxNumber = null } = options;
+  const strokeColor = selected ? "#00c2ff" : getLabelColor(box.label);
+  const strokeAlpha = selected ? 1 : (faded ? 0.3 : 0.85);
+  const fillAlpha = selected ? 0.12 : (faded ? 0.015 : 0.03);
+  const labelAlpha = selected ? 0.9 : (faded ? 0.24 : 0.88);
+  ctx.save();
+  ctx.strokeStyle = selected ? `rgba(0, 194, 255, ${strokeAlpha})` : hexToRgba(strokeColor, strokeAlpha);
+  ctx.fillStyle = selected ? `rgba(0,194,255,${fillAlpha})` : `rgba(255,255,255,${fillAlpha})`;
+  ctx.lineWidth = selected ? 3 : (dashed ? 2 : 2.5);
+  ctx.setLineDash(dashed ? [6, 4] : []);
+  ctx.strokeRect(box.x, box.y, box.w, box.h);
+  if (!dashed) {
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+  }
+  ctx.setLineDash([]);
+
+  if (dashed) {
+    ctx.restore();
+    return;
+  }
+
+  const labelText = boxNumber === null
+    ? `Class ${box.label}: ${getLabelName(box.label)}`
+    : `#${boxNumber}  Class ${box.label}: ${getLabelName(box.label)}`;
+  ctx.font = "600 13px Arial";
+  const textWidth = ctx.measureText(labelText).width + 10;
+  const labelY = Math.max(0, box.y - 26);
+
+  ctx.fillStyle = selected ? `rgba(0,194,255,${labelAlpha})` : hexToRgba(strokeColor, labelAlpha);
+  ctx.fillRect(box.x, labelY, textWidth, 24);
+  ctx.fillStyle = "white";
+  ctx.fillText(labelText, box.x + 5, labelY + 16);
+
+  if (selected) {
+    drawHandle(box);
+  }
+  ctx.restore();
+}
+
+function hexToRgba(hexColor, alpha) {
+  const hex = hexColor.replace("#", "");
+  const normalizedHex = hex.length === 3 ? hex.split("").map(char => char + char).join("") : hex;
+  const red = Number.parseInt(normalizedHex.slice(0, 2), 16);
+  const green = Number.parseInt(normalizedHex.slice(2, 4), 16);
+  const blue = Number.parseInt(normalizedHex.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function redraw() {
+  const shouldFadeExistingBoxes =
+    (interaction === "draw" && Boolean(draftBox)) ||
+    interaction === "move" ||
+    interaction === "resize";
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  boxes.forEach((rawBox, index) => {
+    drawBox(imageToCanvasBox(rawBox), {
+      selected: index === selectedIndex,
+      faded: shouldFadeExistingBoxes && index !== selectedIndex,
+      boxNumber: index + 1
+    });
+  });
+  if (draftBox) {
+    drawBox(draftBox, { dashed: true });
+  }
+  updateDeleteButton();
+}
+
+function resizeCanvas() {
+  canvas.width = imgElement.clientWidth;
+  canvas.height = imgElement.clientHeight;
+  redraw();
+}
+
+function pointInBox(point, box) {
+  return point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h;
+}
+
+function pointInResizeHandle(point, box) {
+  return point.x >= box.x + box.w - RESIZE_HANDLE_SIZE &&
+         point.x <= box.x + box.w &&
+         point.y >= box.y + box.h - RESIZE_HANDLE_SIZE &&
+         point.y <= box.y + box.h;
+}
+
+function findHitTarget(point) {
+  for (let index = boxes.length - 1; index >= 0; index -= 1) {
+    const canvasBox = imageToCanvasBox(boxes[index]);
+    if (pointInResizeHandle(point, canvasBox)) {
+      return { index, mode: "resize", canvasBox };
+    }
+    if (pointInBox(point, canvasBox)) {
+      return { index, mode: "move", canvasBox };
+    }
+  }
+  return null;
+}
+
+async function loadAnnotations() {
+  const response = await fetch(`/load/{{ image.id }}`);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  boxes = await response.json();
+  boxes = boxes.map(box => ({
+    ...box,
+    label: Number(box.label in labelNameById ? box.label : activeLabel)
+  }));
+  selectedIndex = -1;
+  history = [];
+  historyIndex = -1;
+  pushHistory(boxes, selectedIndex);
+  redraw();
+  setStatus(`Loaded ${boxes.length} existing annotation(s)`);
+}
+
+function initializeAnnotator() {
+  resizeCanvas();
+  setCanvasCursor("is-drawing");
+  loadAnnotations().catch(err => {
+    console.error("Load failed:", err);
+    setStatus("Could not load annotations", true);
+  });
+}
+
+imgElement.addEventListener("error", () => {
+  setStatus(`Could not load image from ${imgElement.currentSrc || imgElement.src}`, true);
+});
+
+function startDraw(point) {
+  interaction = "draw";
+  setCanvasCursor("is-drawing");
+  startPoint = point;
+  draftBox = {
+    x: point.x,
+    y: point.y,
+    w: 0,
+    h: 0,
+    label: activeLabel
+  };
+}
+
+function startMove(index, point) {
+  interaction = "move";
+  setCanvasCursor("is-moving");
+  selectedIndex = index;
+  activeLabel = Number(boxes[index].label ?? activeLabel);
+  const box = boxes[index];
+  startPoint = {
+    x: point.x,
+    y: point.y,
+    boxX: box.x,
+    boxY: box.y
+  };
+}
+
+function startResize(index) {
+  interaction = "resize";
+  setCanvasCursor("is-resizing");
+  selectedIndex = index;
+  activeLabel = Number(boxes[index].label ?? activeLabel);
+}
+
+canvas.addEventListener("mouseleave", () => {
+  if (!interaction) {
+    setCanvasCursor("is-drawing");
+  }
+});
+
+canvas.addEventListener("mousedown", event => {
+  const point = getCanvasPoint(event);
+  const hit = findHitTarget(point);
+
+  if (hit) {
+    if (hit.mode === "resize") {
+      startResize(hit.index);
+      setStatus("Resizing selected box");
+    } else {
+      startMove(hit.index, canvasToImageCoords(point.x, point.y));
+      setStatus("Moving selected box");
+    }
+    redraw();
+    return;
+  }
+
+  selectedIndex = -1;
+  startDraw(point);
+  redraw();
+});
+
+canvas.addEventListener("mousemove", event => {
+  const point = getCanvasPoint(event);
+
+  if (!interaction) {
+    const hit = findHitTarget(point);
+    if (hit?.mode === "resize") {
+      setCanvasCursor("is-hovering-handle");
+    } else if (hit?.mode === "move") {
+      setCanvasCursor("is-hovering-box");
+    } else {
+      setCanvasCursor("is-drawing");
+    }
+    return;
+  }
+
+  if (interaction === "draw") {
+    const x = Math.min(startPoint.x, point.x);
+    const y = Math.min(startPoint.y, point.y);
+    draftBox = {
+      x,
+      y,
+      w: Math.abs(point.x - startPoint.x),
+      h: Math.abs(point.y - startPoint.y),
+      label: activeLabel
+    };
+    redraw();
+    return;
+  }
+
+  const imagePoint = canvasToImageCoords(point.x, point.y);
+  const box = boxes[selectedIndex];
+  if (!box) return;
+
+  if (interaction === "move") {
+    box.x = startPoint.boxX + (imagePoint.x - startPoint.x);
+    box.y = startPoint.boxY + (imagePoint.y - startPoint.y);
+    clampBox(box);
+    redraw();
+    return;
+  }
+
+  if (interaction === "resize") {
+    box.w = imagePoint.x - box.x;
+    box.h = imagePoint.y - box.y;
+    clampBox(box);
+    redraw();
+  }
+});
+
+window.addEventListener("mouseup", event => {
+  if (!interaction) return;
+
+  if (interaction === "draw" && draftBox) {
+    const start = canvasToImageCoords(draftBox.x, draftBox.y);
+    const end = canvasToImageCoords(draftBox.x + draftBox.w, draftBox.y + draftBox.h);
+    const newBox = {
+      x: start.x,
+      y: start.y,
+      w: end.x - start.x,
+      h: end.y - start.y,
+      label: activeLabel
+    };
+    if (newBox.w > MIN_BOX_SIZE && newBox.h > MIN_BOX_SIZE) {
+      boxes.push(newBox);
+      selectedIndex = boxes.length - 1;
+      pushHistory(boxes, selectedIndex);
+      setStatus("Box added and selected");
+    } else {
+      setStatus("Box too small", true);
+    }
+  } else if (interaction === "move") {
+    pushHistory(boxes, selectedIndex);
+    setStatus("Selected box moved");
+  } else if (interaction === "resize") {
+    pushHistory(boxes, selectedIndex);
+    setStatus("Selected box resized");
+  }
+
+  interaction = null;
+  startPoint = null;
+  draftBox = null;
+  setCanvasCursor("is-drawing");
+  redraw();
+});
+
+function deleteSelectedBox() {
+  if (selectedIndex < 0) {
+    return;
+  }
+  boxes.splice(selectedIndex, 1);
+  selectedIndex = -1;
+  pushHistory(boxes, selectedIndex);
+  redraw();
+  setStatus("Selected box deleted");
+}
+
+deleteSelectedBtn.addEventListener("click", deleteSelectedBox);
+
+labelSelect.addEventListener("change", event => {
+  activeLabel = Number(event.target.value);
+  if (selectedIndex >= 0 && boxes[selectedIndex]) {
+    boxes[selectedIndex].label = activeLabel;
+    pushHistory(boxes, selectedIndex);
+    redraw();
+    setStatus(`Selected box changed to ${getLabelName(activeLabel)}`);
+  } else {
+    setStatus(`New boxes will use ${getLabelName(activeLabel)}`);
+  }
+});
+
+window.addEventListener("keydown", event => {
+  const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z";
+  const isRedo = ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") ||
+    ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "z");
+
+  if (isUndo) {
+    event.preventDefault();
+    undo();
+    return;
+  }
+
+  if (isRedo) {
+    event.preventDefault();
+    redo();
+    return;
+  }
+
+  if (event.shiftKey && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    saveAnnotations();
+    return;
+  }
+
+  if ((event.key === "Delete" || event.key === "Backspace") && selectedIndex >= 0) {
+    event.preventDefault();
+    deleteSelectedBox();
+  }
+  if (event.key === "ArrowLeft" && {{ "true" if prev_image else "false" }}) {
+    window.location.href = "/annotate/{{ prev_image.id if prev_image else image.id }}";
+  }
+  if (event.key === "ArrowRight" && {{ "true" if next_image else "false" }}) {
+    window.location.href = "/annotate/{{ next_image.id if next_image else image.id }}";
+  }
+});
+
+document.getElementById("clear-btn").onclick = () => {
+  if (confirm("Clear all boxes?")) {
+    boxes = [];
+    selectedIndex = -1;
+    pushHistory(boxes, selectedIndex);
+    redraw();
+    setStatus("All boxes cleared");
+  }
+};
+
+function saveAnnotations() {
+  setStatus("Saving...");
+  fetch(`/save/{{ image.id }}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(boxes)
+  })
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(() => {
+      setStatus("Annotations saved successfully");
+    })
+    .catch(err => {
+      console.error("Save failed:", err);
+      setStatus("Save failed: " + err.message, true);
+    });
+}
+
+document.getElementById("save-btn").onclick = saveAnnotations;
+
+document.getElementById("auto-detect-btn").onclick = () => {
+  setStatus("Running YOLO detection...");
+  fetch(`/detect/{{ image.id }}`)
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      boxes = data;
+      selectedIndex = -1;
+      pushHistory(boxes, selectedIndex);
+      redraw();
+      setStatus(`YOLO found ${data.length} object(s)`);
+    })
+    .catch(err => {
+      console.error("Detection failed:", err);
+      setStatus("Detection failed: " + err.message, true);
+    });
+};
+
+window.addEventListener("resize", resizeCanvas);
+
+if (imgElement.complete && imgElement.naturalWidth) {
+  initializeAnnotator();
+} else {
+  imgElement.addEventListener("load", initializeAnnotator, { once: true });
+}
+</script>
+{% endblock %}

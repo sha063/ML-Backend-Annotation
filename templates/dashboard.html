@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">Your Projects</h1>
+
+{% if projects %}
+  <div class="row">
+    {% for project in projects %}
+      <div class="col-md-4 mb-4">
+        <div class="card">
+          <div class="card-body">
+            <h5 class="card-title">{{ project.name }}</h5>
+            <p class="card-text text-muted">Created by you</p>
+            <a href="/project/{{ project.id }}" class="btn btn-primary">Open Project</a>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="alert alert-info">You don't have any projects yet.</div>
+{% endif %}
+
+<h3 class="mt-5">Create New Project</h3>
+<form method="POST" action="/project/create" class="mt-3">
+  <div class="input-group mb-3 w-50">
+    <input type="text" name="name" class="form-control" placeholder="Project name" required>
+    <button class="btn btn-success" type="submit">Create</button>
+  </div>
+</form>
+{% endblock %}
